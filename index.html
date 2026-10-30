@@ -10,6 +10,7 @@
     --gold: #facc15; --card: rgba(0,0,0,.25); --die: #fdfdf8; --pip: #1f2937;
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   body {
     margin: 0; min-height: 100vh; color: var(--ink);
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -70,7 +71,12 @@
   .msg { text-align: center; min-height: 3em; font-size: 1.05rem; }
   .banner { font-size: 1.4rem; font-weight: 700; color: var(--gold); text-align: center; margin-bottom: 6px; }
   .controls { display: flex; justify-content: center; gap: 10px; margin-top: 8px; }
-  #rollBtn { font-size: 1.2rem; padding: 14px 44px; }
+  #rollBtn, #openBtn { font-size: 1.2rem; padding: 14px 44px; }
+  .pick { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .pick .opts { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; }
+  .pick button { padding: 4px; background: transparent; border-radius: 10px; }
+  .pick button:hover .die { border-color: var(--gold); }
+  .pick .die.small { width: 48px; height: 48px; }
   .hint { text-align: center; font-size: .85rem; margin-top: 10px; }
   @media (max-width: 420px) { .die { width: 64px; height: 64px; } .dice { gap: 10px; } }
 </style>
@@ -78,7 +84,7 @@
 <body>
 <main>
   <h1>🦌 Buck Dice</h1>
-  <p class="sub">Roll the point number. First to 15 wins, and a Big Buck wins on the spot.</p>
+  <p class="sub">Roll the point number. Land exactly on 15 to win, and a Big Buck wins on the spot.</p>
 
   <section id="setup" class="card" hidden>
     <h2>Almost there</h2>
@@ -132,6 +138,8 @@
     <div id="banner" class="banner" hidden></div>
     <div class="msg" id="msg"></div>
     <div class="controls">
+      <button id="openBtn" hidden>Roll for first</button>
+      <div id="pickRow" class="pick" hidden></div>
       <button id="rollBtn" hidden>Roll</button>
       <button id="rematchBtn" hidden>Rematch</button>
     </div>
@@ -160,7 +168,7 @@ const firebaseConfig = {
 // ===== 2. House rules =====
 const TARGET = 15;        // points needed to win
 const LITTLE_BUCK = 5;    // three of a kind that ISN'T the point number
-const EXACT_FINISH = false; // true = must land exactly on TARGET; going over is a bust and ends your turn
+const EXACT_FINISH = true; // true = must land exactly on TARGET; going over is a bust and ends your turn
 
 // ---------------------------------------------------------------------------
 const $ = id => document.getElementById(id);
@@ -222,16 +230,35 @@ function drawDice(values, point, animate) {
 }
 
 // ---------- game rules ----------
-function startRound(g, first) {
-  g.status = "playing";
-  g.point = d6();
+// New game: each player rolls one die. High goes first, low picks the point number.
+function startRound(g) {
+  g.status = "opening";
+  g.opening = null;
+  g.chooser = null;
+  g.point = null;
   g.scores = { p1: 0, p2: 0 };
-  g.turn = first;
+  g.turn = null;
   g.turnPoints = 0;
   g.dice = null;
   g.winner = null;
   g.winType = null;
-  g.lastText = `Point number is ${g.point}. ${g.players[first].name} rolls first.`;
+  g.lastText = "Each player rolls one die: high roll goes first, low roll picks the point number.";
+}
+
+function applyOpening(g, seat) {
+  const o = other(seat), v = d6();
+  g.opening = g.opening || {};
+  g.opening[seat] = v;
+  const ov = g.opening[o];
+  const n = g.players[seat].name, on = g.players[o].name;
+  if (!ov) { g.lastText = `${n} rolled a ${v}. Waiting for ${on}…`; return; }
+  if (v === ov) { g.opening = null; g.lastText = `Tie! Both rolled ${v}. Roll again.`; return; }
+  const high = v > ov ? seat : o, low = other(high);
+  const hn = g.players[high].name, ln = g.players[low].name;
+  g.status = "choosing";
+  g.turn = high;
+  g.chooser = low;
+  g.lastText = `${hn} rolled ${g.opening[high]}, ${ln} rolled ${g.opening[low]}. ${hn} goes first; ${ln} picks the point number.`;
 }
 
 function applyRoll(g) {
@@ -309,7 +336,7 @@ async function joinGame(raw) {
       if (seatOf(g)) return;              // already in this game: no write needed
       if (!g.players?.p2) {
         g.players.p2 = { id: me.id, name: me.name };
-        startRound(g, Math.random() < 0.5 ? "p1" : "p2");
+        startRound(g);
         return g;
       }
       return;                             // full: join as a spectator
@@ -342,10 +369,40 @@ async function rematch() {
     await runTransaction(ref(db, "games/" + room), g => {
       if (g === null) return g;
       if (g.status !== "done") return;
-      startRound(g, other(g.winner)); // loser goes first
+      startRound(g);
       return g;
     });
   } catch (e) { alert("Rematch failed: " + e.message); }
+}
+
+async function rollOpening() {
+  if (busy || !room) return;
+  busy = true; $("openBtn").disabled = true;
+  try {
+    await runTransaction(ref(db, "games/" + room), g => {
+      if (g === null) return g;
+      const seat = seatOf(g);
+      if (!seat || g.status !== "opening" || g.opening?.[seat]) return;
+      applyOpening(g, seat);
+      return g;
+    });
+  } catch (e) { alert("Roll failed: " + e.message); }
+  busy = false; renderGame(game);
+}
+
+async function pickPoint(v) {
+  try {
+    await runTransaction(ref(db, "games/" + room), g => {
+      if (g === null) return g;
+      if (g.status !== "choosing" || g.players?.[g.chooser]?.id !== me.id) return;
+      g.point = v;
+      g.status = "playing";
+      g.lastText = `${g.players[g.chooser].name} picked ${v} as the point number. ${g.players[g.turn].name} rolls first.`;
+      g.chooser = null;
+      g.opening = null;
+      return g;
+    });
+  } catch (e) { alert("Couldn't pick: " + e.message); }
 }
 
 async function recordResult(g) {
@@ -393,13 +450,19 @@ function renderGame(g) {
     el.querySelector(".name").textContent = p ? p.name + (s === seat ? " (you)" : "") : "Waiting…";
     el.querySelector(".score").textContent = score;
     el.querySelector(".bar > div").style.width = (100 * score / TARGET) + "%";
-    el.classList.toggle("active", g.status === "playing" && g.turn === s);
+    el.classList.toggle("active",
+      (g.status === "playing" && g.turn === s) || (g.status === "choosing" && g.chooser === s));
   }
 
   $("pointDie").replaceChildren(g.point ? dieEl(g.point, "small match") : document.createTextNode("?"));
 
   const seq = g.rollSeq || 0;
-  if (g.dice && seq !== lastSeq) drawDice(g.dice, g.point, lastSeq !== -1);
+  const preGame = g.status === "opening" || g.status === "choosing";
+  if (preGame) {
+    // show each player's opening die (p1 left, p2 right)
+    animToken++;
+    $("dice").replaceChildren(...["p1", "p2"].map(s => g.opening?.[s] ? dieEl(g.opening[s]) : dieEl(0, "ghost")));
+  } else if (g.dice && seq !== lastSeq) drawDice(g.dice, g.point, lastSeq !== -1);
   else if (!g.dice) { animToken++; $("dice").replaceChildren(...[1, 1, 1].map(v => dieEl(0, "ghost"))); }
   lastSeq = seq;
 
@@ -419,12 +482,22 @@ function renderGame(g) {
   $("rollBtn").textContent = myTurn ? "Roll" : `${g.players?.[g.turn]?.name || "Opponent"} is rolling…`;
   $("rematchBtn").hidden = !(seat && done);
 
+  const needOpen = seat && g.status === "opening" && !g.opening?.[seat];
+  $("openBtn").hidden = !(seat && g.status === "opening");
+  $("openBtn").disabled = !needOpen || busy;
+  $("openBtn").textContent = needOpen ? "Roll for first" : "Waiting for opponent…";
+
+  const iPick = seat && g.status === "choosing" && g.chooser === seat;
+  $("pickRow").hidden = !iPick;
+
   $("hint").textContent =
     g.status === "waiting" ? "Send your friend the link (or the room code) to start." :
     !seat ? "You're watching this game." :
-    myTurn ? "Tip: press Space to roll." : "";
+    g.status === "choosing" && !iPick ? `${g.players[g.chooser].name} is picking the point number…` :
+    myTurn || needOpen ? "Tip: press Space to roll." : "";
 
-  document.title = myTurn ? "● Your turn · Buck Dice" : done ? "Game over · Buck Dice" : "Buck Dice";
+  const yourMove = myTurn || needOpen || iPick;
+  document.title = yourMove ? "● Your turn · Buck Dice" : done ? "Game over · Buck Dice" : "Buck Dice";
 }
 
 async function showLobby() {
@@ -469,6 +542,21 @@ $("createBtn").onclick = createGame;
 $("joinBtn").onclick = () => joinGame($("codeInput").value);
 $("codeInput").addEventListener("keydown", e => { if (e.key === "Enter") joinGame($("codeInput").value); });
 $("rollBtn").onclick = roll;
+$("openBtn").onclick = rollOpening;
+{
+  const label = document.createElement("div");
+  label.textContent = "You rolled low. Pick the point number:";
+  const opts = document.createElement("div");
+  opts.className = "opts";
+  for (let v = 1; v <= 6; v++) {
+    const b = document.createElement("button");
+    b.setAttribute("aria-label", "Point number " + v);
+    b.appendChild(dieEl(v, "small"));
+    b.onclick = () => pickPoint(v);
+    opts.appendChild(b);
+  }
+  $("pickRow").append(label, opts);
+}
 $("rematchBtn").onclick = rematch;
 $("leaveBtn").onclick = leave;
 $("copyBtn").onclick = async () => {
@@ -478,8 +566,10 @@ $("copyBtn").onclick = async () => {
   setTimeout(() => ($("copyBtn").textContent = "Copy link"), 1500);
 };
 document.addEventListener("keydown", e => {
-  if (e.code === "Space" && !$("game").hidden && !$("rollBtn").hidden && !$("rollBtn").disabled
-      && e.target.tagName !== "INPUT") { e.preventDefault(); roll(); }
+  if (e.code !== "Space" || $("game").hidden || e.target.tagName === "INPUT") return;
+  for (const [id, fn] of [["rollBtn", roll], ["openBtn", rollOpening]]) {
+    if (!$(id).hidden && !$(id).disabled) { e.preventDefault(); fn(); return; }
+  }
 });
 
 const roomParam = new URLSearchParams(location.search).get("room");

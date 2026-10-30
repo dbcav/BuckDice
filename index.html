@@ -1,0 +1,495 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Buck Dice</title>
+<style>
+  :root {
+    --felt: #166534; --felt2: #0c3a1f; --ink: #f8fafc; --muted: #b7d3c0;
+    --gold: #facc15; --card: rgba(0,0,0,.25); --die: #fdfdf8; --pip: #1f2937;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: radial-gradient(circle at 50% 25%, var(--felt), var(--felt2));
+  }
+  main { max-width: 640px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { margin: 0 0 4px; font-size: 2rem; }
+  h2 { margin: 0 0 12px; font-size: 1.1rem; }
+  .sub, .muted { color: var(--muted); }
+  .sub { margin: 0 0 24px; }
+  .card { background: var(--card); border-radius: 14px; padding: 16px; margin-bottom: 16px; }
+  label { display: block; font-size: .85rem; color: var(--muted); margin-bottom: 6px; }
+  input {
+    width: 100%; padding: 10px 12px; border-radius: 8px; font-size: 1rem;
+    border: 1px solid rgba(255,255,255,.2); background: rgba(0,0,0,.25); color: var(--ink);
+  }
+  .row { display: flex; gap: 8px; margin-top: 10px; }
+  .row input { flex: 1; text-transform: uppercase; }
+  button {
+    padding: 10px 16px; border-radius: 8px; border: 0; cursor: pointer;
+    background: var(--gold); color: #1a1a1a; font-weight: 600; font-size: 1rem;
+  }
+  button.secondary { background: rgba(255,255,255,.12); color: var(--ink); }
+  button:disabled { opacity: .4; cursor: default; }
+  table { width: 100%; border-collapse: collapse; font-size: .95rem; }
+  th, td { text-align: left; padding: 6px 4px; border-bottom: 1px solid rgba(255,255,255,.1); }
+  th { color: var(--muted); font-weight: 500; }
+  .num { text-align: right; }
+  ul.history { list-style: none; margin: 0; padding: 0; }
+  ul.history li { padding: 5px 0; border-bottom: 1px solid rgba(255,255,255,.08); }
+  .topbar { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  code.room { font-size: 1.1rem; letter-spacing: .15em; background: rgba(0,0,0,.3); padding: 4px 8px; border-radius: 6px; }
+  .players { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .player { background: var(--card); border-radius: 12px; padding: 12px; border: 2px solid transparent; transition: border-color .2s; }
+  .player.active { border-color: var(--gold); }
+  .player .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .player .score { font-size: 2.2rem; font-weight: 700; line-height: 1.2; }
+  .bar { height: 6px; background: rgba(255,255,255,.12); border-radius: 3px; overflow: hidden; }
+  .bar > div { height: 100%; background: var(--gold); transition: width .4s; }
+  .pointrow { display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--muted); margin: 20px 0 0; }
+  .dice { display: flex; justify-content: center; gap: 16px; margin: 20px 0 12px; min-height: 72px; }
+  .die {
+    width: 72px; height: 72px; padding: 10px; border-radius: 14px; background: var(--die);
+    display: grid; grid-template: repeat(3, 1fr) / repeat(3, 1fr);
+    box-shadow: 0 4px 0 rgba(0,0,0,.3); border: 3px solid transparent;
+  }
+  .die.match { border-color: var(--gold); }
+  .die.ghost { opacity: .25; }
+  .die span { place-self: center; width: 12px; height: 12px; border-radius: 50%; }
+  .die span.on { background: var(--pip); }
+  .die.small { width: 40px; height: 40px; padding: 5px; border-radius: 8px; border-width: 2px; box-shadow: none; }
+  .die.small span { width: 6px; height: 6px; }
+  .rolling { animation: shake .45s; }
+  @keyframes shake {
+    0% { transform: rotate(0) } 25% { transform: rotate(-14deg) translateY(-6px) }
+    50% { transform: rotate(10deg) } 75% { transform: rotate(-6deg) translateY(-3px) } 100% { transform: rotate(0) }
+  }
+  .msg { text-align: center; min-height: 3em; font-size: 1.05rem; }
+  .banner { font-size: 1.4rem; font-weight: 700; color: var(--gold); text-align: center; margin-bottom: 6px; }
+  .controls { display: flex; justify-content: center; gap: 10px; margin-top: 8px; }
+  #rollBtn { font-size: 1.2rem; padding: 14px 44px; }
+  .hint { text-align: center; font-size: .85rem; margin-top: 10px; }
+  @media (max-width: 420px) { .die { width: 64px; height: 64px; } .dice { gap: 10px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>🦌 Buck Dice</h1>
+  <p class="sub">Roll the point number. First to 15 wins, and a Big Buck wins on the spot.</p>
+
+  <section id="setup" class="card" hidden>
+    <h2>Almost there</h2>
+    <p>Paste your Firebase config into <code>firebaseConfig</code> near the top of the script in <code>index.html</code>, then reload.</p>
+  </section>
+
+  <!-- LOBBY -->
+  <section id="lobby" hidden>
+    <div class="card">
+      <label for="nameInput">Your name</label>
+      <input id="nameInput" maxlength="24" placeholder="e.g. Dana" autocomplete="nickname">
+      <div class="row" style="margin-top:14px">
+        <button id="createBtn">New game</button>
+      </div>
+      <label for="codeInput" style="margin-top:16px">…or join with a code</label>
+      <div class="row" style="margin-top:0">
+        <input id="codeInput" maxlength="4" placeholder="ABCD">
+        <button id="joinBtn" class="secondary">Join</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Leaderboard</h2>
+      <table>
+        <thead><tr><th>Player</th><th class="num">Wins</th><th class="num">Games</th><th class="num">Win %</th><th class="num">Big Bucks</th></tr></thead>
+        <tbody id="statsBody"><tr><td colspan="5" class="muted">Loading…</td></tr></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h2>Recent games</h2>
+      <ul id="historyList" class="history"><li class="muted">Loading…</li></ul>
+    </div>
+  </section>
+
+  <!-- GAME -->
+  <section id="game" hidden>
+    <div class="topbar">
+      <div>Room <code class="room" id="roomCode"></code></div>
+      <div style="display:flex;gap:8px">
+        <button id="copyBtn" class="secondary">Copy link</button>
+        <button id="leaveBtn" class="secondary">Leave</button>
+      </div>
+    </div>
+
+    <div class="players">
+      <div class="player" id="p1"><div class="name"></div><div class="score">0</div><div class="bar"><div style="width:0"></div></div></div>
+      <div class="player" id="p2"><div class="name"></div><div class="score">0</div><div class="bar"><div style="width:0"></div></div></div>
+    </div>
+
+    <div class="pointrow">Point number <span id="pointDie">?</span></div>
+    <div class="dice" id="dice"></div>
+    <div id="banner" class="banner" hidden></div>
+    <div class="msg" id="msg"></div>
+    <div class="controls">
+      <button id="rollBtn" hidden>Roll</button>
+      <button id="rematchBtn" hidden>Rematch</button>
+    </div>
+    <div class="hint muted" id="hint"></div>
+  </section>
+</main>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import {
+  getDatabase, ref, get, set, push, onValue, runTransaction,
+  serverTimestamp, query, limitToLast
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+
+// ===== 1. Paste your Firebase web config here =====
+const firebaseConfig = {
+  apiKey: "AIzaSyDnuUo1POi4vyCd7eOOtwqntSQrqtIa6n8",
+  authDomain: "buckdice-e4be0.firebaseapp.com",
+  databaseURL: "https://buckdice-e4be0-default-rtdb.firebaseio.com",
+  projectId: "buckdice-e4be0",
+  storageBucket: "buckdice-e4be0.firebasestorage.app",
+  messagingSenderId: "496731735206",
+  appId: "1:496731735206:web:4abcbe7fa301fecc146067"
+};
+
+// ===== 2. House rules =====
+const TARGET = 15;        // points needed to win
+const LITTLE_BUCK = 5;    // three of a kind that ISN'T the point number
+const EXACT_FINISH = false; // true = must land exactly on TARGET; going over is a bust and ends your turn
+
+// ---------------------------------------------------------------------------
+const $ = id => document.getElementById(id);
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} }
+};
+
+if (!firebaseConfig.apiKey || firebaseConfig.apiKey === "PASTE_ME") {
+  $("setup").hidden = false;
+  throw new Error("Firebase config missing");
+}
+
+const db = getDatabase(initializeApp(firebaseConfig));
+
+const me = {
+  id: store.get("buck.id") || (crypto.randomUUID ? crypto.randomUUID() : String(Math.random()).slice(2)),
+  name: store.get("buck.name") || ""
+};
+store.set("buck.id", me.id);
+
+let room = null, game = null, unsub = null, lastSeq = -1, busy = false, animToken = 0;
+
+const d6 = () => 1 + Math.floor(Math.random() * 6);
+const other = s => (s === "p1" ? "p2" : "p1");
+const statKey = name => name.trim().toLowerCase().replace(/[.#$\[\]\/]/g, "_").slice(0, 40) || "anon";
+const seatOf = g => ["p1", "p2"].find(s => g?.players?.[s]?.id === me.id) || null;
+const randCode = () => Array.from({ length: 4 }, () => "ABCDEFGHJKMNPQRSTUVWXYZ"[Math.floor(Math.random() * 23)]).join("");
+
+// ---------- dice drawing ----------
+const FACES = { 1: [4], 2: [2, 6], 3: [2, 4, 6], 4: [0, 2, 6, 8], 5: [0, 2, 4, 6, 8], 6: [0, 2, 3, 5, 6, 8] };
+function dieEl(v, cls = "") {
+  const d = document.createElement("div");
+  d.className = "die " + cls;
+  for (let i = 0; i < 9; i++) {
+    const s = document.createElement("span");
+    if (FACES[v]?.includes(i)) s.className = "on";
+    d.appendChild(s);
+  }
+  return d;
+}
+function drawDice(values, point, animate) {
+  const box = $("dice");
+  const token = ++animToken;
+  const final = () => {
+    if (token !== animToken) return;
+    box.replaceChildren(...values.map(v => dieEl(v, v === point ? "match" : "")));
+  };
+  if (!animate) return final();
+  let t = 0;
+  const tick = () => {
+    if (token !== animToken) return;
+    if (t >= 6) return final();
+    box.replaceChildren(...[0, 1, 2].map(() => dieEl(d6(), t === 0 ? "rolling" : "")));
+    t++;
+    setTimeout(tick, 70);
+  };
+  tick();
+}
+
+// ---------- game rules ----------
+function startRound(g, first) {
+  g.status = "playing";
+  g.point = d6();
+  g.scores = { p1: 0, p2: 0 };
+  g.turn = first;
+  g.turnPoints = 0;
+  g.dice = null;
+  g.winner = null;
+  g.winType = null;
+  g.lastText = `Point number is ${g.point}. ${g.players[first].name} rolls first.`;
+}
+
+function applyRoll(g) {
+  const seat = g.turn, opp = other(seat), p = g.point;
+  const name = g.players[seat].name, oppName = g.players[opp].name;
+  const dice = [d6(), d6(), d6()];
+  const triple = dice[0] === dice[1] && dice[1] === dice[2];
+  g.dice = dice;
+  g.rollSeq = (g.rollSeq || 0) + 1;
+  g.scores = g.scores || { p1: 0, p2: 0 };
+
+  if (triple && dice[0] === p) {
+    g.status = "done"; g.winner = seat; g.winType = "big";
+    g.lastText = `${name} rolled three ${p}s. BIG BUCK! Instant win.`;
+    return;
+  }
+  let pts = triple ? LITTLE_BUCK : dice.filter(d => d === p).length;
+  const before = g.scores[seat] || 0;
+
+  if (pts === 0) {
+    g.turn = opp; g.turnPoints = 0;
+    g.lastText = `${name} rolled no ${p}s. ${oppName}'s turn.`;
+    return;
+  }
+  if (EXACT_FINISH && before + pts > TARGET) {
+    g.turn = opp; g.turnPoints = 0;
+    g.lastText = `${name} would go over ${TARGET}. Bust! ${oppName}'s turn.`;
+    return;
+  }
+  g.scores[seat] = Math.min(before + pts, TARGET);
+  g.turnPoints = (g.turnPoints || 0) + pts;
+  if (g.scores[seat] >= TARGET) {
+    g.status = "done"; g.winner = seat; g.winType = "points";
+    g.lastText = `${triple ? `Little Buck (+${LITTLE_BUCK})! ` : ""}${name} reaches ${TARGET} and wins!`;
+  } else {
+    g.lastText = triple
+      ? `${name} rolled three ${dice[0]}s. Little Buck, +${LITTLE_BUCK}! Roll again.`
+      : `${name} scored +${pts}. Roll again.`;
+  }
+}
+
+// ---------- actions ----------
+function requireName() {
+  const n = $("nameInput").value.trim();
+  if (!n) { $("nameInput").focus(); alert("Enter your name first."); return false; }
+  me.name = n; store.set("buck.name", n);
+  return true;
+}
+
+async function createGame() {
+  if (!requireName()) return;
+  try {
+    let code;
+    for (let i = 0; i < 10; i++) {
+      code = randCode();
+      if (!(await get(ref(db, "games/" + code))).exists()) break;
+    }
+    await set(ref(db, "games/" + code), {
+      status: "waiting", createdAt: serverTimestamp(),
+      players: { p1: { id: me.id, name: me.name } },
+      scores: { p1: 0, p2: 0 }, turn: "p1", turnPoints: 0, rollSeq: 0,
+      lastText: "Waiting for an opponent…"
+    });
+    enterRoom(code);
+  } catch (e) { alert("Couldn't create game: " + e.message); }
+}
+
+async function joinGame(raw) {
+  const code = (raw || "").trim().toUpperCase();
+  if (!code) return;
+  if (!requireName()) return;
+  try {
+    const res = await runTransaction(ref(db, "games/" + code), g => {
+      if (g === null) return g;           // not loaded yet / doesn't exist
+      if (seatOf(g)) return;              // already in this game: no write needed
+      if (!g.players?.p2) {
+        g.players.p2 = { id: me.id, name: me.name };
+        startRound(g, Math.random() < 0.5 ? "p1" : "p2");
+        return g;
+      }
+      return;                             // full: join as a spectator
+    });
+    if (!res.snapshot.exists()) { alert(`No game with code ${code}.`); showLobby(); return; }
+    enterRoom(code);
+  } catch (e) { alert("Couldn't join: " + e.message); }
+}
+
+async function roll() {
+  if (busy || !room) return;
+  busy = true; $("rollBtn").disabled = true;
+  try {
+    const res = await runTransaction(ref(db, "games/" + room), g => {
+      if (g === null) return g;
+      if (g.status !== "playing" || g.players?.[g.turn]?.id !== me.id) return;
+      applyRoll(g);
+      return g;
+    });
+    const g = res.snapshot.val();
+    if (res.committed && g?.status === "done" && g.players?.[g.winner]?.id === me.id) {
+      recordResult(g).catch(e => console.error("stats", e));
+    }
+  } catch (e) { alert("Roll failed: " + e.message); }
+  setTimeout(() => { busy = false; renderGame(game); }, 500);
+}
+
+async function rematch() {
+  try {
+    await runTransaction(ref(db, "games/" + room), g => {
+      if (g === null) return g;
+      if (g.status !== "done") return;
+      startRound(g, other(g.winner)); // loser goes first
+      return g;
+    });
+  } catch (e) { alert("Rematch failed: " + e.message); }
+}
+
+async function recordResult(g) {
+  const w = g.winner, l = other(w), big = g.winType === "big";
+  const bump = (name, won) => runTransaction(ref(db, "stats/" + statKey(name)), s => {
+    s = s || { wins: 0, games: 0, bigBucks: 0 };
+    s.name = name;
+    s.games = (s.games || 0) + 1;
+    if (won) { s.wins = (s.wins || 0) + 1; if (big) s.bigBucks = (s.bigBucks || 0) + 1; }
+    return s;
+  });
+  await Promise.all([bump(g.players[w].name, true), bump(g.players[l].name, false)]);
+  await push(ref(db, "history"), {
+    winner: g.players[w].name, loser: g.players[l].name,
+    winnerScore: g.scores?.[w] || 0, loserScore: g.scores?.[l] || 0,
+    bigBuck: big, point: g.point, at: serverTimestamp()
+  });
+}
+
+// ---------- screens ----------
+function enterRoom(code) {
+  room = code; lastSeq = -1;
+  history.replaceState(null, "", "?room=" + code);
+  if (unsub) unsub();
+  unsub = onValue(ref(db, "games/" + code), s => { game = s.val(); renderGame(game); });
+  $("lobby").hidden = true; $("game").hidden = false;
+}
+
+function leave() {
+  if (unsub) unsub();
+  unsub = null; room = null; game = null;
+  history.replaceState(null, "", location.pathname);
+  document.title = "Buck Dice";
+  showLobby();
+}
+
+function renderGame(g) {
+  if (!room) return;
+  $("roomCode").textContent = room;
+  if (!g) { $("msg").textContent = "This game no longer exists."; return; }
+  const seat = seatOf(g);
+
+  for (const s of ["p1", "p2"]) {
+    const el = $(s), p = g.players?.[s], score = g.scores?.[s] || 0;
+    el.querySelector(".name").textContent = p ? p.name + (s === seat ? " (you)" : "") : "Waiting…";
+    el.querySelector(".score").textContent = score;
+    el.querySelector(".bar > div").style.width = (100 * score / TARGET) + "%";
+    el.classList.toggle("active", g.status === "playing" && g.turn === s);
+  }
+
+  $("pointDie").replaceChildren(g.point ? dieEl(g.point, "small match") : document.createTextNode("?"));
+
+  const seq = g.rollSeq || 0;
+  if (g.dice && seq !== lastSeq) drawDice(g.dice, g.point, lastSeq !== -1);
+  else if (!g.dice) { animToken++; $("dice").replaceChildren(...[1, 1, 1].map(v => dieEl(0, "ghost"))); }
+  lastSeq = seq;
+
+  const done = g.status === "done";
+  $("banner").hidden = !done;
+  if (done) {
+    const wName = g.players[g.winner].name;
+    $("banner").textContent = g.winner === seat ? "You win! 🎉" : `${wName} wins${g.winType === "big" ? " with a Big Buck" : ""}`;
+  }
+  let msg = g.lastText || "";
+  if (g.status === "playing" && g.turnPoints) msg += `  (this turn: +${g.turnPoints})`;
+  $("msg").textContent = msg;
+
+  const myTurn = g.status === "playing" && g.turn === seat;
+  $("rollBtn").hidden = !(seat && g.status === "playing");
+  $("rollBtn").disabled = !myTurn || busy;
+  $("rollBtn").textContent = myTurn ? "Roll" : `${g.players?.[g.turn]?.name || "Opponent"} is rolling…`;
+  $("rematchBtn").hidden = !(seat && done);
+
+  $("hint").textContent =
+    g.status === "waiting" ? "Send your friend the link (or the room code) to start." :
+    !seat ? "You're watching this game." :
+    myTurn ? "Tip: press Space to roll." : "";
+
+  document.title = myTurn ? "● Your turn · Buck Dice" : done ? "Game over · Buck Dice" : "Buck Dice";
+}
+
+async function showLobby() {
+  $("game").hidden = true; $("lobby").hidden = false;
+  $("nameInput").value = me.name;
+  try {
+    const s = (await get(ref(db, "stats"))).val() || {};
+    const rows = Object.values(s).sort((a, b) => (b.wins || 0) - (a.wins || 0) || (b.games || 0) - (a.games || 0));
+    const body = $("statsBody");
+    body.replaceChildren();
+    if (!rows.length) body.innerHTML = `<tr><td colspan="5" class="muted">No games yet.</td></tr>`;
+    for (const r of rows) {
+      const tr = document.createElement("tr");
+      const pct = r.games ? Math.round(100 * (r.wins || 0) / r.games) + "%" : "–";
+      [r.name, r.wins || 0, r.games || 0, pct, r.bigBucks || 0].forEach((v, i) => {
+        const td = document.createElement("td");
+        td.textContent = v; if (i) td.className = "num";
+        tr.appendChild(td);
+      });
+      body.appendChild(tr);
+    }
+    const h = (await get(query(ref(db, "history"), limitToLast(10)))).val() || {};
+    const list = $("historyList");
+    list.replaceChildren();
+    const games = Object.values(h).reverse();
+    if (!games.length) list.innerHTML = `<li class="muted">No games yet.</li>`;
+    for (const x of games) {
+      const li = document.createElement("li");
+      const when = x.at ? new Date(x.at).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+      li.textContent = `${x.winner} beat ${x.loser} ` +
+        (x.bigBuck ? "with a Big Buck 🦌" : `${x.winnerScore}–${x.loserScore}`) + (when ? ` · ${when}` : "");
+      list.appendChild(li);
+    }
+  } catch (e) {
+    $("statsBody").innerHTML = `<tr><td colspan="5" class="muted">Couldn't load stats (check your database rules).</td></tr>`;
+    console.error(e);
+  }
+}
+
+// ---------- wiring ----------
+$("createBtn").onclick = createGame;
+$("joinBtn").onclick = () => joinGame($("codeInput").value);
+$("codeInput").addEventListener("keydown", e => { if (e.key === "Enter") joinGame($("codeInput").value); });
+$("rollBtn").onclick = roll;
+$("rematchBtn").onclick = rematch;
+$("leaveBtn").onclick = leave;
+$("copyBtn").onclick = async () => {
+  const url = location.origin + location.pathname + "?room=" + room;
+  try { await navigator.clipboard.writeText(url); $("copyBtn").textContent = "Copied!"; }
+  catch { prompt("Copy this link:", url); }
+  setTimeout(() => ($("copyBtn").textContent = "Copy link"), 1500);
+};
+document.addEventListener("keydown", e => {
+  if (e.code === "Space" && !$("game").hidden && !$("rollBtn").hidden && !$("rollBtn").disabled
+      && e.target.tagName !== "INPUT") { e.preventDefault(); roll(); }
+});
+
+const roomParam = new URLSearchParams(location.search).get("room");
+if (roomParam) {
+  $("codeInput").value = roomParam.toUpperCase();
+  if (me.name) { $("nameInput").value = me.name; joinGame(roomParam); }
+  else showLobby();
+} else {
+  showLobby();
+}
+</script>
+</body>
+</html>

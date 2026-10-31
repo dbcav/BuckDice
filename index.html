@@ -18,6 +18,8 @@
   }
   main { max-width: 640px; margin: 0 auto; padding: 24px 16px 48px; }
   h1 { margin: 0 0 4px; font-size: 2rem; }
+  .header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  #muteBtn { white-space: nowrap; font-size: .95rem; padding: 8px 12px; }
   h2 { margin: 0 0 12px; font-size: 1.1rem; }
   .sub, .muted { color: var(--muted); }
   .sub { margin: 0 0 24px; }
@@ -83,7 +85,10 @@
 </head>
 <body>
 <main>
-  <h1>🦌 Buck Dice</h1>
+  <div class="header">
+    <h1>🦌 Buck Dice</h1>
+    <button id="muteBtn" class="secondary" title="Turn sound on/off">🔇 Sound off</button>
+  </div>
   <p class="sub">Roll the point number. Land exactly on 15 to win, and a Big Buck wins on the spot.</p>
 
   <section id="setup" class="card" hidden>
@@ -190,13 +195,36 @@ const me = {
 };
 store.set("buck.id", me.id);
 
-let room = null, game = null, unsub = null, lastSeq = -1, busy = false, animToken = 0;
+let room = null, game = null, unsub = null, lastSeq = -1, busy = false, animToken = 0, lastOpen = null;
 
 const d6 = () => 1 + Math.floor(Math.random() * 6);
 const other = s => (s === "p1" ? "p2" : "p1");
 const statKey = name => name.trim().toLowerCase().replace(/[.#$\[\]\/]/g, "_").slice(0, 40) || "anon";
 const seatOf = g => ["p1", "p2"].find(s => g?.players?.[s]?.id === me.id) || null;
 const randCode = () => Array.from({ length: 4 }, () => "ABCDEFGHJKMNPQRSTUVWXYZ"[Math.floor(Math.random() * 23)]).join("");
+
+// ---------- sound ----------
+// Dice-roll sound effects from Pixabay (Pixabay Content License), one picked at random per roll.
+const SFX = Array.from({ length: 9 }, (_, i) => {
+  const a = new Audio(`sfx/dice-${String(i + 1).padStart(2, "0")}.mp3`);
+  a.preload = "auto";
+  return a;
+});
+let muted = store.get("buck.muted") !== "0"; // muted unless the player has turned sound on
+function playRoll() {
+  if (muted) return;
+  try {
+    const a = SFX[Math.floor(Math.random() * SFX.length)].cloneNode();
+    a.volume = 0.8;
+    a.play().catch(() => {}); // browsers block audio until the page has been clicked once
+  } catch {}
+}
+function setMuted(m) {
+  muted = m;
+  store.set("buck.muted", m ? "1" : "0");
+  $("muteBtn").textContent = m ? "🔇 Sound off" : "🔊 Sound on";
+  $("muteBtn").setAttribute("aria-pressed", String(!m));
+}
 
 // ---------- dice drawing ----------
 const FACES = { 1: [4], 2: [2, 6], 3: [2, 4, 6], 4: [0, 2, 6, 8], 5: [0, 2, 4, 6, 8], 6: [0, 2, 3, 5, 6, 8] };
@@ -218,6 +246,7 @@ function drawDice(values, point, animate) {
     box.replaceChildren(...values.map(v => dieEl(v, v === point ? "match" : "")));
   };
   if (!animate) return final();
+  playRoll();
   let t = 0;
   const tick = () => {
     if (token !== animToken) return;
@@ -330,6 +359,9 @@ async function joinGame(raw) {
   const code = (raw || "").trim().toUpperCase();
   if (!code) return;
   if (!requireName()) return;
+  // Subscribe BEFORE joining: a transaction on a path with no listener can leave
+  // the local cache stale, so a listener attached afterwards may never see the join.
+  enterRoom(code);
   try {
     const res = await runTransaction(ref(db, "games/" + code), g => {
       if (g === null) return g;           // not loaded yet / doesn't exist
@@ -341,9 +373,8 @@ async function joinGame(raw) {
       }
       return;                             // full: join as a spectator
     });
-    if (!res.snapshot.exists()) { alert(`No game with code ${code}.`); showLobby(); return; }
-    enterRoom(code);
-  } catch (e) { alert("Couldn't join: " + e.message); }
+    if (!res.snapshot.exists()) { alert(`No game with code ${code}.`); leave(); return; }
+  } catch (e) { alert("Couldn't join: " + e.message); leave(); }
 }
 
 async function roll() {
@@ -424,7 +455,7 @@ async function recordResult(g) {
 
 // ---------- screens ----------
 function enterRoom(code) {
-  room = code; lastSeq = -1;
+  room = code; lastSeq = -1; lastOpen = null;
   history.replaceState(null, "", "?room=" + code);
   if (unsub) unsub();
   unsub = onValue(ref(db, "games/" + code), s => { game = s.val(); renderGame(game); });
@@ -458,6 +489,14 @@ function renderGame(g) {
 
   const seq = g.rollSeq || 0;
   const preGame = g.status === "opening" || g.status === "choosing";
+  // roll-off sound: play when a new opening die appears (not on first load of the page)
+  const openKey = JSON.stringify(g.opening || null) + "|" + (g.lastText || "");
+  if (g.status === "opening" || g.status === "choosing") {
+    const newDie = lastOpen !== null && openKey !== lastOpen &&
+      (Object.keys(g.opening || {}).length > 0 || /Tie!/.test(g.lastText || "") || g.status === "choosing");
+    if (newDie) playRoll();
+  }
+  lastOpen = openKey;
   if (preGame) {
     // show each player's opening die (p1 left, p2 right)
     animToken++;
@@ -559,6 +598,8 @@ $("openBtn").onclick = rollOpening;
 }
 $("rematchBtn").onclick = rematch;
 $("leaveBtn").onclick = leave;
+$("muteBtn").onclick = () => { setMuted(!muted); playRoll(); }; // quick preview when turning sound on
+setMuted(muted);
 $("copyBtn").onclick = async () => {
   const url = location.origin + location.pathname + "?room=" + room;
   try { await navigator.clipboard.writeText(url); $("copyBtn").textContent = "Copied!"; }
